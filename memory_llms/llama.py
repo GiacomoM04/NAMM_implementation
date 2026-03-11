@@ -327,7 +327,11 @@ class WrappedLlamaForCausalLM(LlamaForCausalLM, MemoryModelWrapper):
         if self.memory_policy_fixed_delay is not None and num_new_tokens > 1:
             past_length = 0
             if past_key_values is not None:
-                num_all_tokens = past_key_values[0][0].shape[-2]
+                if hasattr(past_key_values, 'get_seq_length'):
+                    # DynamicCache (transformers ≥ 4.45)
+                    num_all_tokens = past_key_values.get_seq_length()
+                else:
+                    num_all_tokens = past_key_values[0][0].shape[-2]
                 if num_all_tokens > 0:
                     past_length = self.memory_policy.get_rotary_offset(
                         layer_id=0).item()
@@ -365,12 +369,30 @@ class WrappedLlamaForCausalLM(LlamaForCausalLM, MemoryModelWrapper):
             split_lens = split_lens.tolist()
             assert labels is None, (
               'Tensor splitting has not been tested for training')
+
+            # Defensive: position_ids/cache_position must match input_ids length
+            # at dim=-1. In transformers 4.45+, these may be shorter (e.g., length
+            # 1) if generate() passes a stale value from a previous decode step.
+            if position_ids is not None and position_ids.shape[-1] != num_new_tokens:
+                if attention_mask is not None:
+                    position_ids = attention_mask.long().cumsum(-1) - 1
+                    position_ids = position_ids[:, -num_new_tokens:]
+                else:
+                    position_ids = torch.arange(
+                        num_new_tokens, device=device).unsqueeze(0).expand(bs, -1)
+
+            if cache_position is not None and cache_position.shape[-1] != num_new_tokens:
+                # Recompute cache_position from position_ids start
+                start_pos = int(position_ids[0, 0].item())
+                cache_position = torch.arange(
+                    start_pos, start_pos + num_new_tokens, device=device)
+
             unspecified_max_seq_lens = self.max_seq_lens is None
             if unspecified_max_seq_lens:
                 max_position_ids = position_ids.max(
                     dim=-1, keepdim=True).values
                 self.set_max_seq_lens(max_position_ids)
-            
+
             split_tokens = torch.split(
                 input_ids,
                 split_size_or_sections=split_lens,
@@ -382,7 +404,7 @@ class WrappedLlamaForCausalLM(LlamaForCausalLM, MemoryModelWrapper):
                 split_size_or_sections=split_lens,
                 dim=-1,
                 )
-            
+
             if cache_position is not None:
                 split_cache_position = torch.split(
                     cache_position,
@@ -722,8 +744,16 @@ class LlamaMemoryAttention(LlamaAttention, MemoryAttention):
             if attention_mask is None:
                 sdpa_mask, is_causal = None, True
             else:
-                sdpa_mask = attention_mask[:, :, :, -key_states.shape[-2]:]
-                is_causal = False
+                k_len = key_states.shape[-2]
+                sdpa_mask = attention_mask[:, :, :, -k_len:]
+                if sdpa_mask.shape[-1] < k_len:
+                    # 4D causal mask only covers the current chunk (target_length
+                    # was set from a short attention_mask slice during split
+                    # processing). Fall back to is_causal=True: q_i attends to
+                    # k_0..k_{past+i}, which is exactly correct for chunked prefill.
+                    sdpa_mask, is_causal = None, True
+                else:
+                    is_causal = False
             attn_output = F.scaled_dot_product_attention(
                 query_states, key_states, value_states,
                 attn_mask=sdpa_mask,
@@ -746,7 +776,18 @@ class LlamaMemoryAttention(LlamaAttention, MemoryAttention):
                 causal_mask = F.pad(causal_mask, (n_k-n_q, 0))
                 attn_weights = attn_weights + causal_mask
             else:
-                causal_mask = attention_mask[:, :, :, -key_states.shape[-2]:]
+                k_len = key_states.shape[-2]
+                causal_mask = attention_mask[:, :, :, -k_len:]
+                if causal_mask.shape[-1] < k_len:
+                    # Same scenario as SDPA path: mask covers only the current chunk.
+                    # Rebuild: square causal + left-pad with zeros for all past tokens.
+                    n_q, n_k = attn_weights.shape[-2:]
+                    min_dtype = torch.finfo(hidden_states.dtype).min
+                    causal_mask = torch.full(
+                        (n_q, n_q), fill_value=min_dtype,
+                        dtype=hidden_states.dtype, device=hidden_states.device)
+                    causal_mask = torch.triu(causal_mask, diagonal=1)
+                    causal_mask = F.pad(causal_mask, (n_k - n_q, 0))
                 attn_weights = attn_weights + causal_mask
 
             # upcast attention to fp32
@@ -789,7 +830,7 @@ class LlamaMemoryAttention(LlamaAttention, MemoryAttention):
                     query_states)
     
     def set_max_seq_lens(self, max_seq_lens: Optional[int]):
-        if self.require_manual_max_seq_lens:
+        if getattr(self, 'require_manual_max_seq_lens', False):
             self.rotary_emb.set_max_seq_lens(max_seq_lens)
 
     def _init_rope(self):

@@ -338,8 +338,16 @@ class DeepMP(DynamicParamMemoryPolicy):
             new_sequences = True
         
         if attn_mask is not None:
-            
-            attn_mask = attn_mask.unsqueeze(-2)[..., -num_all_tokens:]
+
+            attn_mask = attn_mask.unsqueeze(-2)
+            if attn_mask.shape[-1] < num_all_tokens:
+                # Mask is shorter than KV cache (split_processing passed a
+                # partial cumulative mask). Pad left with 1 (valid) — the
+                # extra cache tokens are real, not padding.
+                pad_len = num_all_tokens - attn_mask.shape[-1]
+                attn_mask = F.pad(attn_mask, (pad_len, 0), value=1)
+            else:
+                attn_mask = attn_mask[..., -num_all_tokens:]
         if self.requires_position_ids:
             position_ids = self.process_position_ids(
                 position_ids=position_ids, num_all_tokens=num_all_tokens, 

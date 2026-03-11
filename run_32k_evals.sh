@@ -4,8 +4,9 @@
 # Covers 100% passage_ret docs, 99% qasper, 76% narrativeqa.
 set -e
 
-CKPT_NAMM="exp_local/memory_evolution_hf/Llama-3.2-1B-Instruct/NAMM/attn-spec-norm/bam/binary-1024cs/lb3subset-eval-cma-es-p8-rMeanTrue-shared-8pop-16qs-256fixDel-llama32-1b-instruct-stage1/1337/ckpt.pt"
-CKPT_SFT="results/m1_sft/1337/ckpt.pt"
+REPO="/cs/student/project_msc/2025/csml/gmaralla/NAMM_implementation"
+CKPT_NAMM="$REPO/exp_local/memory_evolution_hf/Llama-3.2-1B-Instruct/NAMM/attn-spec-norm/bam/binary-1024cs/lb3subset-eval-cma-es-p8-rMeanTrue-shared-8pop-16qs-256fixDel-llama32-1b-instruct-stage1/1337/ckpt.pt"
+CKPT_SFT="$REPO/results/m1_sft/1337/ckpt.pt"
 GROUP="Llama-3.2-1B-Instruct/fullctx-32k-evals"
 MXPOS=32768
 
