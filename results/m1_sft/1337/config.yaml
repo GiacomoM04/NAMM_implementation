@@ -1,0 +1,23 @@
+always_save_checkpoint: true
+batch_size: 1
+cache_dir: /cs/student/project_msc/2025/csml/gmaralla/.hf_cache
+dtype: bfloat16
+eval_interval: 100
+gradient_accumulation_steps: 16
+init_from: null
+learning_rate: 0.0002
+log_interval: 10
+max_grad_norm: 1.0
+max_seq_len: 3500
+method: m1_sft
+namm_active: false
+num_epochs: 5
+out_dir: ./exp_local/memory_evolution_hf/Llama-3.2-1B-Instruct/grad-lora-study/m1-sft-llama32-1b-instruct-seed1337/1337
+seed: 1337
+sft_mode: true
+task_names:
+- qasper
+- narrativeqa
+- passage_retrieval_en
+warmup_ratio: 0.05
+weight_decay: 0.01
